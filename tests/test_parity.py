@@ -277,6 +277,17 @@ def test_simd_output_copy_with_scalar_tail():
     assert list(ours.iter("a" * 20)) == list(theirs.iter("a" * 20))
 
 
+def test_native_dense_result_materialization():
+    words = [("a" * length, object()) for length in range(1, 9)]
+    ours, theirs = compile_pair(words)
+    text = "a" * 10_000
+    ours_result = list(ours.iter(text))
+    theirs_result = list(theirs.iter(text))
+    assert [end for end, _ in ours_result] == [end for end, _ in theirs_result]
+    for (_, ours_value), (_, theirs_value) in zip(ours_result, theirs_result):
+        assert ours_value is theirs_value
+
+
 @pytest.mark.parametrize("seed", range(10))
 def test_randomized_match_parity(seed):
     rng = random.Random(seed)

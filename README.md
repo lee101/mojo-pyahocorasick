@@ -90,21 +90,27 @@ PY
 
 Measured with `pixi run bench` on an Intel Xeon E5-2697 v4 at 2.30 GHz,
 Linux 6.8.0-136-generic, Python 3.13.14, Mojo
-1.0.0b3.dev2026072406, and pyahocorasick 2.3.0. Each row uses identical
+1.1.0.dev2026081105, and pyahocorasick 2.3.0. Each row uses identical
 patterns, text, and Python object results; the best of five warmed runs is
 reported.
 
 | workload | matches | mojo-pyahocorasick | pyahocorasick | result |
 | --- | ---: | ---: | ---: | ---: |
-| sparse ASCII: 1M chars, 1k patterns | 0 | 9.08 ms | 38.86 ms | 4.28x faster |
-| DNA: 1M chars, 256 patterns | 3,944 | 5.74 ms | 27.03 ms | 4.71x faster |
-| Unicode: 250k chars, 400 patterns | 21 | 1.54 ms | 7.31 ms | 4.76x faster |
-| dense: 200k chars, 8 nested patterns | 1,599,972 | 603.01 ms | 340.87 ms | 1.77x slower |
+| sparse ASCII: 1M chars, 1k patterns | 0 | 9.01 ms | 39.23 ms | 4.35x faster |
+| DNA: 1M chars, 256 patterns | 3,944 | 5.46 ms | 26.91 ms | 4.93x faster |
+| Unicode: 250k chars, 400 patterns | 21 | 1.55 ms | 7.38 ms | 4.76x faster |
+| dense: 200k chars, 8 nested patterns | 1,599,972 | 314.99 ms | 338.35 ms | 1.07x faster |
 
-The dense case emits almost 1.6 million Python tuples, so tuple and value
-materialization is a substantial part of both timings. These are single-machine
-best-case timings, not a general performance guarantee. There is no parallel or
-GPU scan path.
+The dense case emits almost 1.6 million Python tuples. Large result sets use
+bounded native materialization batches to avoid equally large intermediate
+Python lists. These are single-machine best-case timings, not a general
+performance guarantee.
+
+There is no parallel or GPU scan path. Traversal has a loop-carried automaton
+state, so splitting one scan requires redundant overlap work and ordered output
+compaction. It also performs transition lookups rather than floating-point
+arithmetic and is far below the roughly 2-flops-per-byte threshold at which a
+GPU path could justify transfer and launch overhead.
 
 ## How it works
 
@@ -125,16 +131,18 @@ failure links are stored in flat 64-bit arrays; pattern IDs are 32-bit.
 Output IDs and end positions are copied in native-width SIMD batches using
 `simdwidthof[DType.float64]()` with a scalar remainder loop. Match-density
 feedback sizes repeated output buffers up front, avoiding a count-and-rescan
-cycle for dense workloads. Pattern values are gathered in NumPy before Python
-tuples are produced.
+cycle for dense workloads. Small result sets gather pattern values in NumPy.
+Large sets are converted directly into Python tuples in bounded native batches,
+reducing peak temporary allocations while keeping iteration lazy.
 
 Python strings are encoded as contiguous UTF-32 code points so returned indices
 match Python character positions rather than UTF-8 byte offsets. NumPy owns
 the text, automaton, and output buffers. A single `ctypes` call passes their
 addresses as integers to `mpac_scan`; the `@export("mpac_scan") ... abi("C")`
-wrapper rebuilds typed pointers inside Mojo. No Python object crosses the ABI.
-Mojo returns pattern IDs and end indices, and Python maps those IDs back to the
-original arbitrary values.
+wrapper rebuilds typed pointers inside Mojo. No Python object crosses the scan
+ABI. Mojo returns pattern IDs and end indices. For large results, a separate
+GIL-held native call combines those arrays with the immutable pattern-value
+tuple through CPython's object API; smaller results retain the NumPy gather.
 
 ## Development
 
@@ -144,7 +152,7 @@ pixi run test
 pixi run bench
 ```
 
-The test suite contains 43 parity tests against pyahocorasick 2.3.0, plus four
+The test suite contains 44 parity tests against pyahocorasick 2.3.0, plus four
 FFI-boundary safety tests. It covers randomized automata, Unicode, integer
 sequences, dense suffix output, store modes, SIMD remainder handling,
 large-code-point fallback, filters, serialization, lifecycle behavior, and

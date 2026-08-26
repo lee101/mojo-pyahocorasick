@@ -60,6 +60,7 @@ def build(force: bool = False) -> Path:
 
 
 _LIB: ctypes.CDLL | None = None
+_PY_LIB: ctypes.PyDLL | None = None
 
 
 def lib() -> ctypes.CDLL:
@@ -71,6 +72,15 @@ def lib() -> ctypes.CDLL:
     return _LIB
 
 
+def py_lib() -> ctypes.PyDLL:
+    global _PY_LIB
+    if _PY_LIB is None:
+        _PY_LIB = ctypes.PyDLL(str(build()))
+        _PY_LIB.mpac_materialize.argtypes = [I64] * 4
+        _PY_LIB.mpac_materialize.restype = ctypes.py_object
+    return _PY_LIB
+
+
 def scan(*args: int) -> int:
     if len(args) != SCAN_ARGUMENT_COUNT:
         raise TypeError(
@@ -80,3 +90,14 @@ def scan(*args: int) -> int:
     if result < 0:
         raise RuntimeError(f"Mojo scan kernel failed with status {result}")
     return result
+
+
+def materialize(
+    end_indices_address: int,
+    match_ids_address: int,
+    count: int,
+    values: tuple[object, ...],
+) -> list[tuple[int, object]]:
+    return py_lib().mpac_materialize(
+        end_indices_address, match_ids_address, count, id(values)
+    )

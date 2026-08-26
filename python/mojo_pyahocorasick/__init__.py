@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from collections import deque
+from itertools import chain
 from pathlib import Path
 import pickle
 from typing import Any, Callable, Iterator
 
 import numpy as np
 
+from ._lib import materialize as _mojo_materialize
 from ._lib import scan as _mojo_scan
 
 EMPTY = 0
@@ -32,6 +34,8 @@ __version__ = "0.1.0"
 _MISSING = object()
 _FILE_MAGIC = b"MOJO-PYAHOCORASICK\x00\x01"
 _MAX_MATCH_PREALLOCATION = 4_000_000
+_NATIVE_MATERIALIZE_THRESHOLD = 65_536
+_NATIVE_MATERIALIZE_CHUNK = 4_096
 _I32_MAX = np.iinfo(np.int32).max
 
 
@@ -408,6 +412,20 @@ class Automaton:
         ignore_white_space: bool = False,
     ) -> Iterator[tuple[int, Any]]:
         ends, ids = self._search_ids(string, start, end, ignore_white_space)
+        if len(ids) >= _NATIVE_MATERIALIZE_THRESHOLD:
+            def chunks() -> Iterator[list[tuple[int, Any]]]:
+                offset = 0
+                while offset < len(ids):
+                    size = min(_NATIVE_MATERIALIZE_CHUNK, len(ids) - offset)
+                    yield _mojo_materialize(
+                        _address(ends[offset:]),
+                        _address(ids[offset:]),
+                        size,
+                        self._pattern_values,
+                    )
+                    offset += size
+
+            return chain.from_iterable(chunks())
         assert self._pattern_value_array is not None
         values = self._pattern_value_array[ids].tolist()
         return zip(ends.tolist(), values)

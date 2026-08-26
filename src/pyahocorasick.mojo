@@ -1,5 +1,6 @@
 """Aho-Corasick traversal kernels exposed through a stable C ABI."""
 
+from std.ffi import external_call
 from std.sys.info import simd_width_of as simdwidthof
 
 comptime I64Ptr = UnsafePointer[Int64, AnyOrigin[mut=True]]
@@ -153,3 +154,49 @@ def mpac_scan(
                 output_index += 1
         count += output_count
     return count
+
+
+@export("mpac_materialize")
+def mpac_materialize(
+    end_indices_address: Int,
+    match_ids_address: Int,
+    count: Int,
+    values: Int,
+) abi("C") -> Int:
+    if (
+        end_indices_address == 0
+        or match_ids_address == 0
+        or count < 0
+        or values == 0
+    ):
+        return 0
+    var end_indices = i64_ptr(end_indices_address)
+    var match_ids = i32_ptr(match_ids_address)
+    var result = external_call["PyList_New", Int](count)
+    if result == 0:
+        return 0
+    for i in range(count):
+        var pair = external_call["PyTuple_New", Int](2)
+        if pair == 0:
+            external_call["Py_DecRef", NoneType](result)
+            return 0
+        var end_index = external_call["PyLong_FromLongLong", Int](
+            end_indices.load(i)
+        )
+        if end_index == 0:
+            external_call["Py_DecRef", NoneType](pair)
+            external_call["Py_DecRef", NoneType](result)
+            return 0
+        var value = external_call["PyTuple_GetItem", Int](
+            values, Int(match_ids.load(i))
+        )
+        if value == 0:
+            external_call["Py_DecRef", NoneType](end_index)
+            external_call["Py_DecRef", NoneType](pair)
+            external_call["Py_DecRef", NoneType](result)
+            return 0
+        external_call["Py_IncRef", NoneType](value)
+        _ = external_call["PyTuple_SetItem", Int32](pair, 0, end_index)
+        _ = external_call["PyTuple_SetItem", Int32](pair, 1, value)
+        _ = external_call["PyList_SetItem", Int32](result, i, pair)
+    return result
